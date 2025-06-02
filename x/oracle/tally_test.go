@@ -3,13 +3,16 @@ package oracle
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"cosmossdk.io/math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
+
 	"github.com/kiichain/kiichain/v1/x/oracle/keeper"
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
 	"github.com/kiichain/kiichain/v1/x/oracle/utils"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPickReferenceDenom(t *testing.T) {
@@ -34,13 +37,16 @@ func TestPickReferenceDenom(t *testing.T) {
 	require.NoError(t, err)
 
 	// execute staking endblocker to start validators bonding
-	stakingKeeper.EndBlocker(ctx)
+	_, err = stakingKeeper.EndBlocker(ctx)
+	require.NoError(t, err)
 	// ********
 
 	// Modify the oracle param vote threshold
-	params := oracleKeeper.GetParams(ctx)
+	params, err := oracleKeeper.Params.Get(ctx)
+	require.NoError(t, err)
 	params.VoteThreshold = math.LegacyNewDecWithPrec(66, 2) // 0.66
-	oracleKeeper.SetParams(ctx, params)                     // Update params
+	err = oracleKeeper.Params.Set(ctx, params)
+	require.NoError(t, err)
 
 	// Create voting targets
 	votingTarget := map[string]types.Denom{
@@ -71,7 +77,7 @@ func TestPickReferenceDenom(t *testing.T) {
 		{Denom: utils.MicroUsdcDenom, ExchangeRate: math.LegacyNewDec(20300), Power: int64(30), Voter: keeper.ValAddrs[4]},
 	}
 
-	ukiiBallot := types.ExchangeRateBallot{
+	akiiBallot := types.ExchangeRateBallot{
 		{Denom: utils.MicroKiiDenom, ExchangeRate: math.LegacyNewDec(30000), Power: int64(20), Voter: keeper.ValAddrs[0]},
 		{Denom: utils.MicroKiiDenom, ExchangeRate: math.LegacyNewDec(30100), Power: int64(10), Voter: keeper.ValAddrs[1]},
 		{Denom: utils.MicroKiiDenom, ExchangeRate: math.LegacyNewDec(29580), Power: int64(30), Voter: keeper.ValAddrs[3]},
@@ -81,16 +87,16 @@ func TestPickReferenceDenom(t *testing.T) {
 		utils.MicroAtomDenom: uatomBallot,
 		utils.MicroEthDenom:  uethBallot,
 		utils.MicroUsdcDenom: uusdcBallot,
-		utils.MicroKiiDenom:  ukiiBallot,
+		utils.MicroKiiDenom:  akiiBallot,
 		"extraDenom":         uatomBallot, // This denom will be removed because is not on the voting targets
 	}
 
 	// Expected below threshold vote map
 	expectedBelowThreshold := map[string]types.ExchangeRateBallot{
-		utils.MicroKiiDenom: ukiiBallot,
+		utils.MicroKiiDenom: akiiBallot,
 	}
 
-	// Must return denom MicroAtomDenom and ukiiBallot as below threshold map
+	// Must return denom MicroAtomDenom and akiiBallot as below threshold map
 	referenceDenom, belowThresholdVoteMap := pickReferenceDenom(ctx, oracleKeeper, votingTarget, voteMap)
 	require.Equal(t, utils.MicroAtomDenom, referenceDenom)
 	require.Equal(t, expectedBelowThreshold, belowThresholdVoteMap)
@@ -135,7 +141,8 @@ func TestTally(t *testing.T) {
 	require.NoError(t, err)
 
 	// execute staking endblocker to start validators bonding
-	stakingKeeper.EndBlocker(ctx)
+	_, err = stakingKeeper.EndBlocker(ctx)
+	require.NoError(t, err)
 
 	// Get claim map
 	validatorClaimMap := make(map[string]types.Claim)

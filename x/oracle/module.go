@@ -5,18 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/gorilla/mux"
+	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/spf13/cobra"
+
 	abci "github.com/cometbft/cometbft/abci/types"
+
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
-	"github.com/gorilla/mux"
-	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+
 	"github.com/kiichain/kiichain/v1/x/oracle/client/cli"
 	"github.com/kiichain/kiichain/v1/x/oracle/keeper"
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -146,14 +149,22 @@ func (am AppModule) RegisterInvariants(_ sdk.InvariantRegistry) {}
 func (am AppModule) InitGenesis(ctx sdk.Context, cdc codec.JSONCodec, data json.RawMessage) []abci.ValidatorUpdate {
 	genesis := &types.GenesisState{}
 	cdc.MustUnmarshalJSON(data, genesis)
-	InitGenesis(ctx, am.Kepper, genesis)
+	// Initialize the genesis state
+	err := InitGenesis(ctx, am.Kepper, genesis)
+	if err != nil {
+		panic(fmt.Errorf("failed to initialize %s genesis state: %w", types.ModuleName, err))
+	}
 	return nil
 }
 
 // ExportGenesis returns the current genesis state as json
 func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.RawMessage {
-	genesis := ExportGenesis(ctx, am.Kepper)
-	return cdc.MustMarshalJSON(&genesis)
+	genesis, err := ExportGenesis(ctx, am.Kepper)
+	if err != nil {
+		panic(fmt.Errorf("failed to export %s genesis state: %w", types.ModuleName, err))
+	}
+
+	return cdc.MustMarshalJSON(genesis)
 }
 
 // ConsensusVersion returns the version the module's version
@@ -161,7 +172,14 @@ func (AppModule) ConsensusVersion() uint64 { return 6 }
 
 // EndBlock returns the module's end blocker
 func (am AppModule) EndBlock(ctx sdk.Context) (res []abci.ValidatorUpdate) {
-	MidBlocker(ctx, am.Kepper)
-	Endblocker(ctx, am.Kepper)
+	// TODO: CHECK ME
+	err := MidBlocker(ctx, am.Kepper)
+	if err != nil {
+		ctx.Logger().Error(fmt.Sprintf("failed to execute mid-blocker: %s", err.Error()))
+	}
+	err = Endblocker(ctx, am.Kepper)
+	if err != nil {
+		ctx.Logger().Error(fmt.Sprintf("failed to execute end-blocker: %s", err.Error()))
+	}
 	return []abci.ValidatorUpdate{}
 }

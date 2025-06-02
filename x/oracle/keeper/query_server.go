@@ -3,10 +3,12 @@ package keeper
 import (
 	"context"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/kiichain/kiichain/v1/x/oracle/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
+	"github.com/kiichain/kiichain/v1/x/oracle/types"
 )
 
 // queryServer struct that handlers the rpc request
@@ -28,8 +30,10 @@ func NewQueryServer(keepr Keeper) types.QueryServer {
 func (qs queryServer) Params(ctx context.Context, req *types.QueryParamsRequest) (*types.QueryParamsResponse, error) {
 	// Get the module's params from the keeper
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	var params types.Params
-	qs.Keeper.paramSpace.GetParamSet(sdkCtx, &params)
+	params, err := qs.Keeper.Params.Get(sdkCtx)
+	if err != nil {
+		return nil, err
+	}
 
 	return &types.QueryParamsResponse{Params: &params}, nil
 }
@@ -47,18 +51,14 @@ func (qs queryServer) ExchangeRate(ctx context.Context, req *types.QueryExchange
 
 	// Get exchange rate by denom
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	exchangeRate, lastUpdate, lastUpdateTimestamp, err := qs.Keeper.GetBaseExchangeRate(sdkCtx, req.Denom)
+	exchangeRate, err := qs.Keeper.ExchangeRate.Get(sdkCtx, req.Denom)
 	if err != nil {
 		return nil, err
 	}
 
 	// Prepare response
 	response := &types.QueryExchangeRateResponse{
-		OracleExchangeRate: &types.OracleExchangeRate{
-			ExchangeRate:        exchangeRate,
-			LastUpdate:          lastUpdate,
-			LastUpdateTimestamp: lastUpdateTimestamp,
-		},
+		OracleExchangeRate: &exchangeRate,
 	}
 
 	return response, nil
@@ -69,10 +69,13 @@ func (qs queryServer) ExchangeRates(ctx context.Context, req *types.QueryExchang
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 
 	exchangeRates := []types.DenomOracleExchangeRate{}
-	qs.Keeper.IterateBaseExchangeRates(sdkCtx, func(denom string, exchangeRate types.OracleExchangeRate) bool {
+	err := qs.Keeper.ExchangeRate.Walk(sdkCtx, nil, func(denom string, exchangeRate types.OracleExchangeRate) (bool, error) {
 		exchangeRates = append(exchangeRates, types.DenomOracleExchangeRate{Denom: denom, OracleExchangeRate: &exchangeRate})
-		return false
+		return false, nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	return &types.QueryExchangeRatesResponse{DenomOracleExchangeRate: exchangeRates}, nil
 }
@@ -82,10 +85,13 @@ func (qs queryServer) Actives(ctx context.Context, req *types.QueryActivesReques
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 
 	denomsActive := []string{}
-	qs.Keeper.IterateBaseExchangeRates(sdkCtx, func(denom string, exchangeRate types.OracleExchangeRate) bool {
+	err := qs.Keeper.ExchangeRate.Walk(sdkCtx, nil, func(denom string, exchangeRate types.OracleExchangeRate) (bool, error) {
 		denomsActive = append(denomsActive, denom)
-		return false
+		return false, nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	return &types.QueryActivesResponse{Actives: denomsActive}, nil
 }
@@ -93,7 +99,11 @@ func (qs queryServer) Actives(ctx context.Context, req *types.QueryActivesReques
 // VoteTargets queries the voting target list on current vote period
 func (qs queryServer) VoteTargets(ctx context.Context, req *types.QueryVoteTargetsRequest) (*types.QueryVoteTargetsResponse, error) {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	return &types.QueryVoteTargetsResponse{VoteTargets: qs.Keeper.GetVoteTargets(sdkCtx)}, nil
+	// Get the vote targets
+	voteTargets, err := qs.Keeper.GetVoteTargets(sdkCtx)
+
+	// Return the response and the error
+	return &types.QueryVoteTargetsResponse{VoteTargets: voteTargets}, err
 }
 
 // PriceSnapshotHistory queries all snapshots
@@ -102,10 +112,13 @@ func (qs queryServer) PriceSnapshotHistory(ctx context.Context, req *types.Query
 
 	// Get the snapshots available on the KVStore
 	priceSnapshots := []types.PriceSnapshot{}
-	qs.Keeper.IteratePriceSnapshots(sdkCtx, func(snapshot types.PriceSnapshot) bool {
+	err := qs.Keeper.PriceSnapshot.Walk(sdkCtx, nil, func(_ int64, snapshot types.PriceSnapshot) (bool, error) {
 		priceSnapshots = append(priceSnapshots, snapshot)
-		return false
+		return false, nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	return &types.QueryPriceSnapshotHistoryResponse{PriceSnapshot: priceSnapshots}, nil
 }
@@ -136,10 +149,12 @@ func (qs queryServer) FeederDelegation(ctx context.Context, req *types.QueryFeed
 
 	// Get the delegator by the Validator address
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	feederAddr := qs.Keeper.GetFeederDelegation(sdkCtx, valAddr).String()
+	feederDelegation, err := qs.Keeper.GetFeederDelegationOrDefault(sdkCtx, valAddr)
+	if err != nil {
+		return nil, err
+	}
 
-	return &types.QueryFeederDelegationResponse{FeedAddr: feederAddr}, nil
-
+	return &types.QueryFeederDelegationResponse{FeedAddr: feederDelegation.String()}, nil
 }
 
 // VotePenaltyCounter queries the validator penalty's counter information
@@ -156,25 +171,20 @@ func (qs queryServer) VotePenaltyCounter(ctx context.Context, req *types.QueryVo
 
 	// Get the penalty counters by the validator address
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	missCount := qs.Keeper.GetMissCount(sdkCtx, valAddr)
-	abstainCount := qs.Keeper.GetAbstainCount(sdkCtx, valAddr)
-	successCount := qs.Keeper.GetSuccessCount(sdkCtx, valAddr)
-
-	// Prepare response
-	votePenaltyCounter := &types.VotePenaltyCounter{
-		MissCount:    missCount,
-		AbstainCount: abstainCount,
-		SuccessCount: successCount,
+	voteCounter, err := qs.Keeper.VotePenaltyCounter.Get(sdkCtx, valAddr)
+	if err != nil {
+		return nil, err
 	}
-
-	return &types.QueryVotePenaltyCounterResponse{VotePenaltyCounter: votePenaltyCounter}, nil
-
+	return &types.QueryVotePenaltyCounterResponse{VotePenaltyCounter: &voteCounter}, nil
 }
 
-// SlashWindow queries the
+// SlashWindow queries the slash window progress
 func (qs queryServer) SlashWindow(ctx context.Context, req *types.QuerySlashWindowRequest) (*types.QuerySlashWindowResponse, error) {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
-	params := qs.Keeper.GetParams(sdkCtx)
+	params, err := qs.Keeper.Params.Get(sdkCtx)
+	if err != nil {
+		return nil, err
+	}
 
 	// The window progress is the number of vote periods that have been completed in the current slashing window.
 	// With a vote period of 1, this will be equivalent to the number of blocks that have progressed in the slash window.

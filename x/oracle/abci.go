@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
 	"github.com/kiichain/kiichain/v1/x/oracle/keeper"
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
 	"github.com/kiichain/kiichain/v1/x/oracle/utils"
@@ -12,14 +13,21 @@ import (
 // MidBlocker is the function executed when each block has been completed
 // this function get the votes from the validators, calculate the exchange rate using
 // weighted median logic when the vote period is almost finished
-func MidBlocker(ctx sdk.Context, k keeper.Keeper) {
-	params := k.GetParams(ctx)
+func MidBlocker(ctx sdk.Context, k keeper.Keeper) error {
+	// Get the params
+	params, err := k.Params.Get(ctx)
+	if err != nil {
+		return err
+	}
 
 	// Check if the current block is the last one to finish the voting period
 	if utils.IsPeriodLastBlock(ctx, params.VotePeriod) {
 		validatorClaimMap := make(map[string]types.Claim) // here I will store the claim per validator
 
-		iterator, _ := k.StakingKeeper.ValidatorsPowerStoreIterator(ctx) // FIXME: handle the error properly
+		iterator, err := k.StakingKeeper.ValidatorsPowerStoreIterator(ctx)
+		if err != nil {
+			return err
+		}
 
 		defer iterator.Close()
 
@@ -27,8 +35,11 @@ func MidBlocker(ctx sdk.Context, k keeper.Keeper) {
 
 		// Iterate over validators and register only the bonded ones
 		for ; iterator.Valid(); iterator.Next() {
-			valAddr := sdk.ValAddress(iterator.Value())             // Get validator address
-			validator, _ := k.StakingKeeper.Validator(ctx, valAddr) // FIXME: handle the error properly
+			valAddr := sdk.ValAddress(iterator.Value()) // Get validator address
+			validator, err := k.StakingKeeper.Validator(ctx, valAddr)
+			if err != nil {
+				return err
+			}
 
 			// add bonded validators
 			if validator.IsBonded() {
@@ -45,13 +56,19 @@ func MidBlocker(ctx sdk.Context, k keeper.Keeper) {
 
 		// Get the voting targets from the KVStore
 		voteTargets := make(map[string]types.Denom)
-		k.IterateVoteTargets(ctx, func(denom string, denomInfo types.Denom) bool {
+		err = k.VoteTarget.Walk(ctx, nil, func(denom string, denomInfo types.Denom) (bool, error) {
 			voteTargets[denom] = denomInfo
-			return false
+			return false, nil
 		})
+		if err != nil {
+			return err
+		}
 
 		// Create a reference denom (RD) based on the voting power
-		voteMap := k.OrganizeBallotByDenom(ctx, validatorClaimMap) // Create a map (denom sorted) with the votes by denom
+		voteMap, err := k.OrganizeBallotByDenom(ctx, validatorClaimMap) // Create a map (denom sorted) with the votes by denom
+		if err != nil {
+			return err
+		}
 		referenceDenom, belowThresholdVoteMap := pickReferenceDenom(ctx, k, voteTargets, voteMap)
 
 		if referenceDenom != "" {
@@ -91,7 +108,10 @@ func MidBlocker(ctx sdk.Context, k keeper.Keeper) {
 				}
 
 				// set the exchange rate with event
-				k.SetBaseExchangeRateWithEvent(ctx, denom, exchangeRate)
+				err = k.SetBaseExchangeRateWithEvent(ctx, denom, exchangeRate)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -111,35 +131,53 @@ func MidBlocker(ctx sdk.Context, k keeper.Keeper) {
 		// Validate miss voting process
 		for _, claim := range validatorClaimMap {
 			if int(claim.WinCount) == len(voteTargets) {
-				k.IncrementSuccessCount(ctx, claim.Recipient)
+				err = k.IncrementSuccessCount(ctx, claim.Recipient)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 
 			if !claim.DidVote {
-				k.IncrementAbstainCount(ctx, claim.Recipient)
+				err = k.IncrementAbstainCount(ctx, claim.Recipient)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 
-			k.IncrementMissCount(ctx, claim.Recipient)
+			err = k.IncrementMissCount(ctx, claim.Recipient)
+			if err != nil {
+				return err
+			}
 		}
 
 		// Clear the ballot
-		k.ClearBallots(ctx)
+		err = k.AggregateExchangeRateVote.Clear(ctx, nil)
+		if err != nil {
+			return err
+		}
 
 		// Update vote target
-		k.ApplyWhitelist(ctx, params.Whitelist, voteTargets)
+		err = k.ApplyWhitelist(ctx, params.Whitelist, voteTargets)
+		if err != nil {
+			return err
+		}
 
 		// take an snapshot for each price
 		priceSnapshotItems := []types.PriceSnapshotItem{}
-		k.IterateBaseExchangeRates(ctx, func(denom string, exchangeRate types.OracleExchangeRate) bool {
+		err = k.ExchangeRate.Walk(ctx, nil, func(denom string, exchangeRate types.OracleExchangeRate) (bool, error) {
 			priceSnapshotItem := types.PriceSnapshotItem{
 				Denom:              denom,
 				OracleExchangeRate: exchangeRate,
 			}
 
 			priceSnapshotItems = append(priceSnapshotItems, priceSnapshotItem)
-			return false
+			return false, nil
 		})
+		if err != nil {
+			return err
+		}
 
 		// create and save general snapshot
 		if len(priceSnapshotItems) > 0 {
@@ -147,19 +185,36 @@ func MidBlocker(ctx sdk.Context, k keeper.Keeper) {
 				SnapshotTimestamp:  ctx.BlockTime().Unix(),
 				PriceSnapshotItems: priceSnapshotItems,
 			}
-			k.AddPriceSnapshot(ctx, priceSnapshot)
+			err := k.AddPriceSnapshot(ctx, priceSnapshot)
+			if err != nil {
+				return err
+			}
 		}
 	}
+
+	return nil
 }
 
 // Endblocker is the function that slash the validators and reset the miss counters
-func Endblocker(ctx sdk.Context, k keeper.Keeper) {
-	params := k.GetParams(ctx)
+func Endblocker(ctx sdk.Context, k keeper.Keeper) error {
+	// Get the params
+	params, err := k.Params.Get(ctx)
+	if err != nil {
+		return err
+	}
 
 	// Slash who did miss voting over threshold
 	// reset miss counter of all validators at the last block of slash window
 	if utils.IsPeriodLastBlock(ctx, params.SlashWindow) {
-		k.SlashAndResetCounters(ctx) // slash validator and reset voting counter
-		k.RemoveExcessFeeds(ctx)     // remove aditional rates added on the votes
+		err = k.SlashAndResetCounters(ctx) // slash validator and reset voting counter
+		if err != nil {
+			return err
+		}
+		err = k.RemoveExcessFeeds(ctx) // remove aditional rates added on the votes
+		if err != nil {
+			return err
+		}
 	}
+
+	return nil
 }

@@ -3,11 +3,14 @@ package oracle
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
+	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
+
 	"github.com/kiichain/kiichain/v1/x/oracle/keeper"
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
 	"github.com/kiichain/kiichain/v1/x/oracle/utils"
-	"github.com/stretchr/testify/require"
 )
 
 /* SetUp conditions:
@@ -15,7 +18,7 @@ voting target:
 - uatom
 - ueth
 - uusd
-- ukii
+- akii
 
 validators:
 - val 1
@@ -23,7 +26,7 @@ validators:
 - val 3
 
 Default Vote Threshold: 66.7%
-bonded tokens: 30 ukii
+bonded tokens: 30 akii
 ballot threshold: 20 power units
 
 */
@@ -36,8 +39,10 @@ func TestMidBlocker(t *testing.T) {
 		oracleKeeper := input.OracleKeeper
 
 		// Sample exchange rate for the test
-		oracleKeeper.DeleteVoteTargets(ctx)
-		oracleKeeper.SetVoteTarget(ctx, utils.MicroAtomDenom)
+		err := oracleKeeper.VoteTarget.Clear(ctx, nil)
+		require.NoError(t, err)
+		err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroAtomDenom, types.Denom{Name: utils.MicroAtomDenom})
+		require.NoError(t, err)
 		exchangeRate := randomAExchangeRate.String() + utils.MicroAtomDenom
 
 		ctx = input.Ctx.WithBlockHeight(1)
@@ -49,13 +54,15 @@ func TestMidBlocker(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		MidBlocker(ctx, oracleKeeper)
-		Endblocker(ctx, oracleKeeper)
-
-		rate, lastUpdate, _, err := oracleKeeper.GetBaseExchangeRate(ctx, utils.MicroAtomDenom)
+		err = MidBlocker(ctx, oracleKeeper)
 		require.NoError(t, err)
-		require.Equal(t, randomAExchangeRate, rate)
-		require.Equal(t, int64(1), lastUpdate.Int64()) // Last update block should be 1
+		err = Endblocker(ctx, oracleKeeper)
+		require.NoError(t, err)
+
+		exchangeRateResponse, err := oracleKeeper.ExchangeRate.Get(ctx, utils.MicroAtomDenom)
+		require.NoError(t, err)
+		require.Equal(t, randomAExchangeRate, exchangeRateResponse.ExchangeRate)
+		require.Equal(t, int64(1), exchangeRateResponse.LastUpdate.Int64()) // Last update block should be 1
 	})
 
 	t.Run("Success case - snapshot created", func(t *testing.T) {
@@ -65,8 +72,10 @@ func TestMidBlocker(t *testing.T) {
 		oracleKeeper := input.OracleKeeper
 
 		// Sample exchange rate for the test
-		oracleKeeper.DeleteVoteTargets(ctx)
-		oracleKeeper.SetVoteTarget(ctx, utils.MicroAtomDenom)
+		err := oracleKeeper.VoteTarget.Clear(ctx, nil)
+		require.NoError(t, err)
+		err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroAtomDenom, types.Denom{Name: utils.MicroAtomDenom})
+		require.NoError(t, err)
 		exchangeRate := randomAExchangeRate.String() + utils.MicroAtomDenom
 
 		ctx = input.Ctx.WithBlockHeight(1)
@@ -78,14 +87,17 @@ func TestMidBlocker(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		MidBlocker(ctx, oracleKeeper)
-		Endblocker(ctx, oracleKeeper)
+		err = MidBlocker(ctx, oracleKeeper)
+		require.NoError(t, err)
+		err = Endblocker(ctx, oracleKeeper)
+		require.NoError(t, err)
 
 		// validate snapshot
-		oracleKeeper.IteratePriceSnapshots(ctx, func(snapshot types.PriceSnapshot) bool {
+		err = oracleKeeper.PriceSnapshot.Walk(ctx, nil, func(_ int64, snapshot types.PriceSnapshot) (bool, error) {
 			require.Equal(t, snapshot.PriceSnapshotItems[0].Denom, utils.MicroAtomDenom)
-			return false
+			return false, nil
 		})
+		require.NoError(t, err)
 	})
 
 	t.Run("Error case - Ballot power less than threshold", func(t *testing.T) {
@@ -95,21 +107,25 @@ func TestMidBlocker(t *testing.T) {
 		oracleKeeper := input.OracleKeeper
 
 		// Sample exchange rate for the test
-		oracleKeeper.DeleteVoteTargets(ctx)
-		oracleKeeper.SetVoteTarget(ctx, utils.MicroAtomDenom)
+		err := oracleKeeper.VoteTarget.Clear(ctx, nil)
+		require.NoError(t, err)
+		err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroAtomDenom, types.Denom{Name: utils.MicroAtomDenom})
+		require.NoError(t, err)
 		exchangeRate := randomAExchangeRate.String() + utils.MicroAtomDenom
 
 		ctx = input.Ctx.WithBlockHeight(1)
 
 		// Only one validator votes (insufficient power)
 		voteMsg := types.NewMsgAggregateExchangeRateVote(exchangeRate, keeper.Addrs[0], keeper.ValAddrs[0])
-		_, err := msgServer.AggregateExchangeRateVote(ctx, voteMsg)
+		_, err = msgServer.AggregateExchangeRateVote(ctx, voteMsg)
 		require.NoError(t, err)
 
-		MidBlocker(ctx, oracleKeeper) // rate did not storage on KVStore, ballot below ballot threshold
-		Endblocker(ctx, oracleKeeper)
+		err = MidBlocker(ctx, oracleKeeper) // rate did not storage on KVStore, ballot below ballot threshold
+		require.NoError(t, err)
+		err = Endblocker(ctx, oracleKeeper)
+		require.NoError(t, err)
 
-		_, _, _, err = oracleKeeper.GetBaseExchangeRate(ctx, utils.MicroAtomDenom)
+		_, err = oracleKeeper.ExchangeRate.Get(ctx, utils.MicroAtomDenom)
 		require.Error(t, err)
 	})
 
@@ -120,8 +136,10 @@ func TestMidBlocker(t *testing.T) {
 		oracleKeeper := input.OracleKeeper
 
 		// Sample exchange rate for the test
-		oracleKeeper.DeleteVoteTargets(ctx)
-		oracleKeeper.SetVoteTarget(ctx, utils.MicroAtomDenom)
+		err := oracleKeeper.VoteTarget.Clear(ctx, nil)
+		require.NoError(t, err)
+		err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroAtomDenom, types.Denom{Name: utils.MicroAtomDenom})
+		require.NoError(t, err)
 		exchangeRate := randomAExchangeRate.String() + utils.MicroAtomDenom
 
 		ctx = input.Ctx.WithBlockHeight(1)
@@ -133,11 +151,16 @@ func TestMidBlocker(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		MidBlocker(ctx, oracleKeeper)
-		Endblocker(ctx, oracleKeeper)
+		err = MidBlocker(ctx, oracleKeeper)
+		require.NoError(t, err)
+		err = Endblocker(ctx, oracleKeeper)
+		require.NoError(t, err)
 
-		abstainCount := oracleKeeper.GetAbstainCount(ctx, keeper.ValAddrs[2])
-		require.Equal(t, uint64(1), abstainCount) // Validator 2 has 1 abstained
+		// Get the Vote Penalty Counter for the abstaining validator
+		votePenaltyCounter, err := oracleKeeper.VotePenaltyCounter.Get(ctx, keeper.ValAddrs[2])
+		require.NoError(t, err)
+
+		require.EqualValues(t, uint64(1), votePenaltyCounter.AbstainCount) // Validator 2 has 1 abstained
 	})
 
 	t.Run("Validator votes out of acceptable range - Should count as Miss", func(t *testing.T) {
@@ -147,8 +170,10 @@ func TestMidBlocker(t *testing.T) {
 		oracleKeeper := input.OracleKeeper
 
 		// Sample exchange rate for the test
-		oracleKeeper.DeleteVoteTargets(ctx)
-		oracleKeeper.SetVoteTarget(ctx, utils.MicroAtomDenom)
+		err := oracleKeeper.VoteTarget.Clear(ctx, nil)
+		require.NoError(t, err)
+		err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroAtomDenom, types.Denom{Name: utils.MicroAtomDenom})
+		require.NoError(t, err)
 		exchangeRate := randomAExchangeRate.String() + utils.MicroAtomDenom
 
 		ctx = input.Ctx.WithBlockHeight(1)
@@ -156,7 +181,7 @@ func TestMidBlocker(t *testing.T) {
 		// Validator submits an incorrect exchange rate
 		wrongRate := "100000000.0" + utils.MicroAtomDenom
 		voteMsg := types.NewMsgAggregateExchangeRateVote(wrongRate, keeper.Addrs[0], keeper.ValAddrs[0])
-		_, err := msgServer.AggregateExchangeRateVote(ctx, voteMsg)
+		_, err = msgServer.AggregateExchangeRateVote(ctx, voteMsg)
 		require.NoError(t, err)
 
 		// Other validators submit correct votes
@@ -166,84 +191,96 @@ func TestMidBlocker(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		MidBlocker(ctx, oracleKeeper)
-		Endblocker(ctx, oracleKeeper)
+		err = MidBlocker(ctx, oracleKeeper)
+		require.NoError(t, err)
+		err = Endblocker(ctx, oracleKeeper)
+		require.NoError(t, err)
 
-		missCount := oracleKeeper.GetMissCount(ctx, keeper.ValAddrs[0])
-		require.Equal(t, uint64(1), missCount) // Validator 0 has 1 Miss
+		// Get the Vote Penalty Counter for the abstaining validator
+		votePenaltyCounter, err := oracleKeeper.VotePenaltyCounter.Get(ctx, keeper.ValAddrs[0])
+		require.NoError(t, err)
+
+		require.Equal(t, uint64(1), votePenaltyCounter.MissCount) // Validator 0 has 1 Miss
 	})
 
 	t.Run("Verify upgrading the vote targets", func(t *testing.T) {
 		// Reset blockchain state
 		input, _ := SetUp(t)
-		ctx := input.Ctx
 		oracleKeeper := input.OracleKeeper
 
-		ctx = input.Ctx.WithBlockHeight(1)
+		ctx := input.Ctx.WithBlockHeight(1)
 
-		// Modify the whitelist and apply it (ukii and uusdc will be 'new assets')
-		oracleKeeper.DeleteVoteTargets(ctx)
+		// Modify the whitelist and apply it (akii and uusdc will be 'new assets')
+		err := oracleKeeper.VoteTarget.Clear(ctx, nil)
+		require.NoError(t, err)
 		newWhitelist := types.DenomList{
 			{Name: utils.MicroAtomDenom},
 			{Name: utils.MicroEthDenom},
 		}
-		params := oracleKeeper.GetParams(ctx)
+		params, err := oracleKeeper.Params.Get(ctx)
+		require.NoError(t, err)
 		params.Whitelist = newWhitelist
-		oracleKeeper.SetParams(ctx, params)
+		err = oracleKeeper.Params.Set(ctx, params)
+		require.NoError(t, err)
 
 		voteTargetsBefore := make(map[string]types.Denom)
-		oracleKeeper.IterateVoteTargets(ctx, func(denom string, denomInfo types.Denom) bool {
+		err = oracleKeeper.VoteTarget.Walk(ctx, nil, func(denom string, denomInfo types.Denom) (bool, error) {
 			voteTargetsBefore[denom] = denomInfo
-			return false
+			return false, nil
 		})
+		require.NoError(t, err)
 
-		MidBlocker(ctx, oracleKeeper)
+		err = MidBlocker(ctx, oracleKeeper)
+		require.NoError(t, err)
 
 		voteTargetsAfter := make(map[string]types.Denom)
-		oracleKeeper.IterateVoteTargets(ctx, func(denom string, denomInfo types.Denom) bool {
+		err = oracleKeeper.VoteTarget.Walk(ctx, nil, func(denom string, denomInfo types.Denom) (bool, error) {
 			voteTargetsAfter[denom] = denomInfo
-			return false
+			return false, nil
 		})
+		require.NoError(t, err)
 
 		// validate the vote target
 		require.NotEqual(t, voteTargetsBefore, voteTargetsAfter)
 		require.Len(t, voteTargetsAfter, 2) // Only uatom and ueth must be on the vote target
 
-		_, err := oracleKeeper.GetVoteTarget(ctx, utils.MicroKiiDenom)
+		_, err = oracleKeeper.VoteTarget.Get(ctx, utils.MicroKiiDenom)
 		require.Error(t, err)
-		_, err = oracleKeeper.GetVoteTarget(ctx, utils.MicroUsdcDenom)
+		_, err = oracleKeeper.VoteTarget.Get(ctx, utils.MicroUsdcDenom)
 		require.Error(t, err)
-
 	})
-
 }
 
 func TestOracleDrop(t *testing.T) {
 	// Reset blockchain state
 	input, msgServer := SetUp(t)
-	ctx := input.Ctx
 	oracleKeeper := input.OracleKeeper
-	ctx = input.Ctx.WithBlockHeight(1)
+	ctx := input.Ctx.WithBlockHeight(1)
 
-	oracleKeeper.DeleteVoteTargets(ctx)
-	oracleKeeper.SetVoteTarget(ctx, utils.MicroAtomDenom)
-	input.OracleKeeper.SetBaseExchangeRate(ctx, utils.MicroAtomDenom, randomAExchangeRate)
+	err := oracleKeeper.VoteTarget.Clear(ctx, nil)
+	require.NoError(t, err)
+	err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroAtomDenom, types.Denom{Name: utils.MicroAtomDenom})
+	require.NoError(t, err)
+	err = input.OracleKeeper.SetBaseExchangeRateWithDefault(ctx, utils.MicroAtomDenom, randomAExchangeRate)
+	require.NoError(t, err)
 
 	// Sample exchange rate for the test
 	exchangeRate := randomAExchangeRate.String() + utils.MicroAtomDenom
 
 	// simulate val 0 votation
 	voteMsg := types.NewMsgAggregateExchangeRateVote(exchangeRate, keeper.Addrs[0], keeper.ValAddrs[0])
-	_, err := msgServer.AggregateExchangeRateVote(ctx.WithBlockHeight(9), voteMsg)
+	_, err = msgServer.AggregateExchangeRateVote(ctx.WithBlockHeight(9), voteMsg)
 	require.NoError(t, err)
 
 	// Immediately swap halt after an illiquid oracle vote
-	MidBlocker(ctx, oracleKeeper)
-	Endblocker(ctx, oracleKeeper)
-
-	rate, _, _, err := oracleKeeper.GetBaseExchangeRate(ctx, utils.MicroAtomDenom)
+	err = MidBlocker(ctx, oracleKeeper)
 	require.NoError(t, err)
-	require.True(t, randomAExchangeRate.Equal(rate))
+	err = Endblocker(ctx, oracleKeeper)
+	require.NoError(t, err)
+
+	exchangeRateRes, err := oracleKeeper.ExchangeRate.Get(ctx, utils.MicroAtomDenom)
+	require.NoError(t, err)
+	require.True(t, randomAExchangeRate.Equal(exchangeRateRes.ExchangeRate))
 }
 
 func TestEndblocker(t *testing.T) {
@@ -256,18 +293,24 @@ func TestEndblocker(t *testing.T) {
 
 		// Simulate a validator with too many misses
 		operator := keeper.ValAddrs[0]
-		oracleKeeper.SetVotePenaltyCounter(ctx, operator, 15, 1, 5)
+
+		// Set the vote penalty counter for the validator
+		err := oracleKeeper.VotePenaltyCounter.Set(input.Ctx, operator, types.NewVotePenaltyCounter(15, 1, 5))
+		require.NoError(t, err)
 
 		// update MinValidPerWindow
-		params := oracleKeeper.GetParams(ctx)
+		params, err := oracleKeeper.Params.Get(ctx)
+		require.NoError(t, err)
 		params.MinValidPerWindow = math.LegacyNewDecWithPrec(50, 2) // 50%
 		params.SlashFraction = math.LegacyNewDecWithPrec(50, 2)     // 50%
-		oracleKeeper.SetParams(ctx, params)
+		err = oracleKeeper.Params.Set(ctx, params)
+		require.NoError(t, err)
 
 		// Execute EndBlocker on the last block of slash window
 		slashWindow := params.SlashWindow
 		ctx = ctx.WithBlockHeight(int64(slashWindow) - 1)
-		Endblocker(ctx, oracleKeeper)
+		err = Endblocker(ctx, oracleKeeper)
+		require.NoError(t, err)
 
 		// Check if validator was jailed
 		validator, err := oracleKeeper.StakingKeeper.Validator(ctx, operator)
@@ -279,8 +322,9 @@ func TestEndblocker(t *testing.T) {
 		require.True(t, slashedPower < 10)
 
 		// Check voting info deleted
-		result := oracleKeeper.GetVotePenaltyCounter(ctx, operator)
+		result, err := oracleKeeper.VotePenaltyCounter.Get(ctx, operator)
 		require.Empty(t, result)
+		require.ErrorIs(t, err, collections.ErrNotFound)
 	})
 
 	t.Run("Validator not jailed", func(t *testing.T) {
@@ -292,18 +336,24 @@ func TestEndblocker(t *testing.T) {
 
 		// Simulate a validator with too many misses
 		operator := keeper.ValAddrs[0]
-		oracleKeeper.SetVotePenaltyCounter(ctx, operator, 4, 5, 10)
+
+		// Set the vote penalty counter for the validator
+		err := oracleKeeper.VotePenaltyCounter.Set(input.Ctx, operator, types.NewVotePenaltyCounter(4, 5, 10))
+		require.NoError(t, err)
 
 		// update MinValidPerWindow
-		params := oracleKeeper.GetParams(ctx)
+		params, err := oracleKeeper.Params.Get(ctx)
+		require.NoError(t, err)
 		params.MinValidPerWindow = math.LegacyNewDecWithPrec(50, 2) // 50%
 		params.SlashFraction = math.LegacyNewDecWithPrec(50, 2)     // 50%
-		oracleKeeper.SetParams(ctx, params)
+		err = oracleKeeper.Params.Set(ctx, params)
+		require.NoError(t, err)
 
 		// Execute EndBlocker on the last block of slash window
 		slashWindow := params.SlashWindow
 		ctx = ctx.WithBlockHeight(int64(slashWindow) - 1)
-		Endblocker(ctx, oracleKeeper)
+		err = Endblocker(ctx, oracleKeeper)
+		require.NoError(t, err)
 
 		// Check if validator was jailed
 		validator, err := oracleKeeper.StakingKeeper.Validator(ctx, operator)
@@ -315,8 +365,9 @@ func TestEndblocker(t *testing.T) {
 		require.True(t, slashedPower == 10) // voting power does not change
 
 		// Check voting info deleted
-		result := oracleKeeper.GetVotePenaltyCounter(ctx, operator)
+		result, err := oracleKeeper.VotePenaltyCounter.Get(ctx, operator)
 		require.Empty(t, result)
+		require.ErrorIs(t, err, collections.ErrNotFound)
 	})
 
 	t.Run("Success remove excess feeds", func(t *testing.T) {
@@ -327,29 +378,41 @@ func TestEndblocker(t *testing.T) {
 
 		// Simulate a validator with too many misses
 		operator := keeper.ValAddrs[0]
-		oracleKeeper.SetVotePenaltyCounter(ctx, operator, 4, 5, 10)
 
-		// Agregate voting targets
-		oracleKeeper.DeleteVoteTargets(ctx) // clean voting target list
-		oracleKeeper.SetVoteTarget(ctx, utils.MicroAtomDenom)
-		oracleKeeper.SetVoteTarget(ctx, utils.MicroEthDenom)
+		// Set the vote penalty counter for the validator
+		err := oracleKeeper.VotePenaltyCounter.Set(input.Ctx, operator, types.NewVotePenaltyCounter(4, 5, 10))
+		require.NoError(t, err)
+
+		// Aggregate voting targets
+		err = oracleKeeper.VoteTarget.Clear(ctx, nil) // clean voting target list
+		require.NoError(t, err)
+		err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroAtomDenom, types.Denom{Name: utils.MicroAtomDenom})
+		require.NoError(t, err)
+
+		err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroEthDenom, types.Denom{Name: utils.MicroEthDenom})
+		require.NoError(t, err)
 
 		// Aggregate base exchange rate
-		oracleKeeper.SetBaseExchangeRate(ctx, utils.MicroAtomDenom, math.LegacyNewDec(1))
-		oracleKeeper.SetBaseExchangeRate(ctx, utils.MicroEthDenom, math.LegacyNewDec(2))
-		oracleKeeper.SetBaseExchangeRate(ctx, utils.MicroKiiDenom, math.LegacyNewDec(3)) // extra denom
+		err = oracleKeeper.SetBaseExchangeRateWithDefault(ctx, utils.MicroAtomDenom, math.LegacyNewDec(1))
+		require.NoError(t, err)
+		err = oracleKeeper.SetBaseExchangeRateWithDefault(ctx, utils.MicroEthDenom, math.LegacyNewDec(2))
+		require.NoError(t, err)
+		err = oracleKeeper.SetBaseExchangeRateWithDefault(ctx, utils.MicroKiiDenom, math.LegacyNewDec(3)) // extra denom
+		require.NoError(t, err)
 
 		// Execute EndBlocker on the last block of slash window
-		params := oracleKeeper.GetParams(ctx)
+		params, err := oracleKeeper.Params.Get(ctx)
+		require.NoError(t, err)
 		slashWindow := params.SlashWindow
 		ctx = ctx.WithBlockHeight(int64(slashWindow) - 1)
-		Endblocker(ctx, oracleKeeper)
+		err = Endblocker(ctx, oracleKeeper)
+		require.NoError(t, err)
 
-		// Validate the successfull erased of the extra denoms
-		oracleKeeper.IterateBaseExchangeRates(ctx, func(denom string, exchangeRate types.OracleExchangeRate) bool {
+		// Validate the successful erased of the extra denoms
+		err = oracleKeeper.ExchangeRate.Walk(ctx, nil, func(denom string, exchangeRate types.OracleExchangeRate) (bool, error) {
 			require.True(t, denom != utils.MicroKiiDenom)
-			return false
+			return false, nil
 		})
-
+		require.NoError(t, err)
 	})
 }

@@ -4,13 +4,14 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"github.com/spf13/cobra"
 
 	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/client/tx"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
-	"github.com/spf13/cobra"
 )
 
 // GetTxCmd returns the tx commands for oracle module
@@ -64,13 +65,13 @@ func CmdAggregateExchangeRateVote() *cobra.Command {
 		Long: strings.TrimSpace(`
 Submit an aggregate vote with the exchange rates.
 		
-$kiichaind tx oracle aggregate-vote 123.45ukii,678.90uatom...
+$kiichaind tx oracle aggregate-vote 123.45akii,678.90uatom...
 		
-where "ukii,uatom,ueth..." are the denominating currencies and 123.45,678.90 are the exchange rates of micro USD in micro denoms
+where "akii,uatom,ueth..." are the denominating currencies and 123.45,678.90 are the exchange rates of micro USD in micro denoms
 		
 If voting from a delegate account, set "validator" to the address of the validator you are voting on behalf of, i.e:
 		
-$ kiichaind oracle aggregate-vote 123.45ukii,678.90uatom... kiivaloper1...`),
+$ kiichaind oracle aggregate-vote 123.45akii,678.90uatom... kiivaloper1...`),
 		RunE: aggregateVote,
 	}
 

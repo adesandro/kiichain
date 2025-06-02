@@ -3,12 +3,14 @@ package oracle_test
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"cosmossdk.io/math"
+
 	"github.com/kiichain/kiichain/v1/x/oracle"
 	"github.com/kiichain/kiichain/v1/x/oracle/keeper"
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
 	"github.com/kiichain/kiichain/v1/x/oracle/utils"
-	"github.com/stretchr/testify/require"
 )
 
 func TestExportInitGenesis(t *testing.T) {
@@ -59,18 +61,30 @@ func TestExportInitGenesis(t *testing.T) {
 		},
 	)
 
-	oracleKeeper.SetFeederDelegation(ctx, keeper.ValAddrs[0], keeper.Addrs[1])
-	oracleKeeper.SetBaseExchangeRate(ctx, utils.MicroAtomDenom, math.LegacyNewDec(123))
-	oracleKeeper.SetAggregateExchangeRateVote(ctx, keeper.ValAddrs[0], exchangeRateVote)
-	oracleKeeper.SetVoteTarget(ctx, utils.MicroAtomDenom)
-	oracleKeeper.SetVoteTarget(ctx, utils.MicroEthDenom)
-	oracleKeeper.SetVotePenaltyCounter(ctx, keeper.ValAddrs[0], 2, 3, 0)
-	oracleKeeper.SetVotePenaltyCounter(ctx, keeper.ValAddrs[1], 4, 5, 0)
-	oracleKeeper.AddPriceSnapshot(ctx, snapshot1)
-	oracleKeeper.AddPriceSnapshot(ctx, snapshot2)
+	err = oracleKeeper.FeederDelegation.Set(ctx, keeper.ValAddrs[0], keeper.Addrs[1].String())
+	require.NoError(t, err)
+	err = oracleKeeper.SetBaseExchangeRateWithDefault(ctx, utils.MicroAtomDenom, math.LegacyNewDec(123))
+	require.NoError(t, err)
+	err = oracleKeeper.AggregateExchangeRateVote.Set(ctx, keeper.ValAddrs[0], exchangeRateVote)
+	require.NoError(t, err)
+
+	err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroAtomDenom, types.Denom{Name: utils.MicroAtomDenom})
+	require.NoError(t, err)
+	err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroEthDenom, types.Denom{Name: utils.MicroEthDenom})
+	require.NoError(t, err)
+
+	err = oracleKeeper.VotePenaltyCounter.Set(ctx, keeper.ValAddrs[0], types.NewVotePenaltyCounter(2, 3, 0))
+	require.NoError(t, err)
+	err = oracleKeeper.VotePenaltyCounter.Set(ctx, keeper.ValAddrs[1], types.NewVotePenaltyCounter(4, 5, 0))
+	require.NoError(t, err)
+	err = oracleKeeper.AddPriceSnapshot(ctx, snapshot1)
+	require.NoError(t, err)
+	err = oracleKeeper.AddPriceSnapshot(ctx, snapshot2)
+	require.NoError(t, err)
 
 	// Export genesis
-	genesis := oracle.ExportGenesis(ctx, oracleKeeper)
+	genesis, err := oracle.ExportGenesis(ctx, oracleKeeper)
+	require.NoError(t, err)
 
 	// Create new test env
 	newInput := keeper.CreateTestInput(t)
@@ -78,8 +92,10 @@ func TestExportInitGenesis(t *testing.T) {
 	newctx := newInput.Ctx
 
 	// use the exported genesis on the new env
-	oracle.InitGenesis(newctx, neworacleKeeper, &genesis)
-	newGenesis := oracle.ExportGenesis(newctx, neworacleKeeper)
+	err = oracle.InitGenesis(newctx, neworacleKeeper, genesis)
+	require.NoError(t, err)
+	newGenesis, err := oracle.ExportGenesis(newctx, neworacleKeeper)
+	require.NoError(t, err)
 
 	// validation
 	require.Equal(t, genesis, newGenesis)

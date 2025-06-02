@@ -3,52 +3,64 @@ package keeper
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/cometbft/cometbft/crypto"
+	"github.com/cometbft/cometbft/crypto/secp256k1"
+	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
+
+	ratelimittypes "github.com/cosmos/ibc-apps/modules/rate-limiting/v8/types"
+
 	errorsmod "cosmossdk.io/errors"
+	"cosmossdk.io/log"
+	"cosmossdk.io/math"
+	storetypes "cosmossdk.io/store/types"
+	evidencetypes "cosmossdk.io/x/evidence/types"
+	upgradetypes "cosmossdk.io/x/upgrade/types"
+
 	"github.com/cosmos/cosmos-sdk/codec"
 	addresscodec "github.com/cosmos/cosmos-sdk/codec/address"
+	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
+	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	"github.com/cosmos/cosmos-sdk/runtime"
 	"github.com/cosmos/cosmos-sdk/testutil/integration"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	"github.com/cosmos/cosmos-sdk/types/module"
 	"github.com/cosmos/cosmos-sdk/x/auth"
+	authcodec "github.com/cosmos/cosmos-sdk/x/auth/codec"
+	authkeeper "github.com/cosmos/cosmos-sdk/x/auth/keeper"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	authvesting "github.com/cosmos/cosmos-sdk/x/auth/vesting/types"
 	"github.com/cosmos/cosmos-sdk/x/bank"
+	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/cosmos/cosmos-sdk/x/distribution"
+	distkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
+	distribtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
+	govv1types "github.com/cosmos/cosmos-sdk/x/gov/types/v1"
+	govv1beta1types "github.com/cosmos/cosmos-sdk/x/gov/types/v1beta1"
 	"github.com/cosmos/cosmos-sdk/x/params"
+	paramsTypes "github.com/cosmos/cosmos-sdk/x/params/types"
+	paramsproptypes "github.com/cosmos/cosmos-sdk/x/params/types/proposal"
 	"github.com/cosmos/cosmos-sdk/x/staking"
+	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
+	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+
+	erc20types "github.com/cosmos/evm/x/erc20/types"
+	feemarkettypes "github.com/cosmos/evm/x/feemarket/types"
+	evmtypes "github.com/cosmos/evm/x/vm/types"
+
 	kiiparams "github.com/kiichain/kiichain/v1/app/params"
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
 	"github.com/kiichain/kiichain/v1/x/oracle/utils"
-	"github.com/stretchr/testify/require"
-
-	authkeeper "github.com/cosmos/cosmos-sdk/x/auth/keeper"
-	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
-	distkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
-	paramskeeper "github.com/cosmos/cosmos-sdk/x/params/keeper"
-	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
-
-	authTypes "github.com/cosmos/cosmos-sdk/x/auth/types"
-	bankTypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-	distTypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
-	paramsTypes "github.com/cosmos/cosmos-sdk/x/params/types"
-	stakingTypes "github.com/cosmos/cosmos-sdk/x/staking/types"
-
-	"cosmossdk.io/math"
-	storetypes "cosmossdk.io/store/types"
-	authcodec "github.com/cosmos/cosmos-sdk/x/auth/codec"
-
-	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
-
-	"cosmossdk.io/log"
-	"github.com/cometbft/cometbft/crypto"
-	"github.com/cometbft/cometbft/crypto/secp256k1"
-	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	tokenfactorytypes "github.com/kiichain/kiichain/v1/x/tokenfactory/types"
 )
 
 const faucetAccountName = "faucet"
@@ -116,15 +128,13 @@ type TestInput struct {
 // CreateTestInput prepate the testing env, initializes modules, creates ctx,
 // prepares memory storage and create testing accounts with funds
 func CreateTestInput(t *testing.T) TestInput {
-	// Create the KV store to each module (each one needs this to store its data)
-	keyOracle := storetypes.NewKVStoreKey(types.StoreKey)
-	keyParams := storetypes.NewKVStoreKey(paramsTypes.StoreKey)
-
+	t.Helper()
+	// Start the keys
 	keys := storetypes.NewKVStoreKeys(
-		authTypes.StoreKey,
-		bankTypes.StoreKey,
-		distTypes.StoreKey,
-		stakingTypes.StoreKey,
+		authtypes.StoreKey,
+		banktypes.StoreKey,
+		distribtypes.StoreKey,
+		stakingtypes.StoreKey,
 		paramsTypes.StoreKey,
 		types.StoreKey,
 		paramsTypes.TStoreKey,
@@ -132,39 +142,55 @@ func CreateTestInput(t *testing.T) TestInput {
 
 	authority := authtypes.NewModuleAddress("gov")
 
-	tKeyParams := storetypes.NewTransientStoreKey(paramsTypes.TStoreKey) // create a KV store for temporal parameters
-
 	cms := integration.CreateMultiStore(keys, log.NewTestLogger(t))                               // create the multistore to handle the KV stores
 	ctx := sdk.NewContext(cms, tmproto.Header{Time: time.Now().UTC()}, false, log.NewNopLogger()) // Create new context
 
 	encodingConfig := kiiparams.MakeEncodingConfig()
 	// Register the auth interface
+	banktypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
 	authtypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	authvesting.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	stakingtypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	evidencetypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	cryptocodec.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	govv1types.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	govv1beta1types.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	paramsproptypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	paramsproptypes.RegisterLegacyAminoCodec(encodingConfig.Amino)
+
+	upgradetypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	distribtypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	ratelimittypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	tokenfactorytypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+
+	// EVM register interfaces
+	evmtypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	erc20types.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	feemarkettypes.RegisterInterfaces(encodingConfig.InterfaceRegistry)
 
 	appCodec, legacyAmino := encodingConfig.Marshaler, encodingConfig.Amino
 
 	// Set permissions and blacklist for accounts
 	blackListAddrs := map[string]bool{
-		authTypes.FeeCollectorName:     true,
-		stakingTypes.NotBondedPoolName: true,
-		stakingTypes.BondedPoolName:    true,
-		distTypes.ModuleName:           true,
+		authtypes.FeeCollectorName:     true,
+		stakingtypes.NotBondedPoolName: true,
+		stakingtypes.BondedPoolName:    true,
+		distribtypes.ModuleName:        true,
 		faucetAccountName:              true,
 		types.ModuleName:               true,
 	}
 
 	// Define account's permissions
 	maccPerms := map[string][]string{
-		authTypes.FeeCollectorName:     {authTypes.Minter},
-		stakingTypes.NotBondedPoolName: nil,
-		stakingTypes.BondedPoolName:    {authTypes.Burner, authTypes.Staking},
-		distTypes.ModuleName:           {authTypes.Burner, authTypes.Staking},
-		faucetAccountName:              {authTypes.Minter},
-		types.ModuleName:               {authTypes.Minter, authTypes.Burner},
+		authtypes.FeeCollectorName:     {authtypes.Minter},
+		stakingtypes.NotBondedPoolName: {authtypes.Burner, authtypes.Staking},
+		stakingtypes.BondedPoolName:    {authtypes.Burner, authtypes.Staking},
+		distribtypes.ModuleName:        {authtypes.Burner, authtypes.Staking},
+		faucetAccountName:              {authtypes.Minter},
+		types.ModuleName:               {authtypes.Minter, authtypes.Burner},
 	}
 
 	// Init account, bank and staking keepers
-	paramsKeeper := paramskeeper.NewKeeper(appCodec, legacyAmino, keyParams, tKeyParams)
 	accountKeeper := authkeeper.NewAccountKeeper(
 		appCodec,
 		runtime.NewKVStoreService(keys[authtypes.StoreKey]),
@@ -176,7 +202,7 @@ func CreateTestInput(t *testing.T) TestInput {
 	)
 	bankKeeper := bankkeeper.NewBaseKeeper(
 		appCodec,
-		runtime.NewKVStoreService(keys[bankTypes.StoreKey]),
+		runtime.NewKVStoreService(keys[banktypes.StoreKey]),
 		accountKeeper,
 		blackListAddrs,
 		authority.String(),
@@ -186,55 +212,40 @@ func CreateTestInput(t *testing.T) TestInput {
 	// Set Staking module on my testing environment
 	stakingKeeper := stakingkeeper.NewKeeper(
 		appCodec,
-		runtime.NewKVStoreService(keys[stakingTypes.StoreKey]),
+		runtime.NewKVStoreService(keys[stakingtypes.StoreKey]),
 		accountKeeper,
 		bankKeeper,
 		authority.String(),
 		authcodec.NewBech32Codec(sdk.GetConfig().GetBech32ValidatorAddrPrefix()),
 		authcodec.NewBech32Codec(sdk.GetConfig().GetBech32ConsensusAddrPrefix()),
 	)
-	stakingParams := stakingTypes.DefaultParams()
+	stakingParams := stakingtypes.DefaultParams()
 	stakingParams.BondDenom = utils.MicroKiiDenom
-	stakingKeeper.SetParams(ctx, stakingParams)
+	err := stakingKeeper.SetParams(ctx, stakingParams)
+	require.NoError(t, err)
 
 	// Set distribution module on my testing environment
 	distKeeper := distkeeper.NewKeeper(
 		appCodec,
-		runtime.NewKVStoreService(keys[distTypes.StoreKey]),
+		runtime.NewKVStoreService(keys[distribtypes.StoreKey]),
 		accountKeeper,
 		bankKeeper,
 		stakingKeeper,
-		authTypes.FeeCollectorName,
+		authtypes.FeeCollectorName,
 		authority.String(),
 	)
 
-	distKeeper.FeePool.Set(ctx, distTypes.InitialFeePool())
-	distParams := distTypes.DefaultParams()
-	distParams.CommunityTax = math.LegacyNewDecWithPrec(2, 2)        // 0.02
-	distParams.BaseProposerReward = math.LegacyNewDecWithPrec(1, 2)  // 0.01
-	distParams.BonusProposerReward = math.LegacyNewDecWithPrec(4, 2) // 0.04
-	distKeeper.Params.Set(ctx, distParams)
-	stakingKeeper.SetHooks(stakingTypes.NewMultiStakingHooks(distKeeper.Hooks()))
-
-	// Create empty module accounts and assign permissions
-	// faucetAcc := authTypes.NewEmptyModuleAccount(faucetAccountName, authTypes.Minter, authTypes.Burner) // Account with the tokens
-	// feeCollectorAcc := authTypes.NewEmptyModuleAccount(authTypes.FeeCollectorName)                      // Create fee collector account
-	// notBondedPoolAcc := authTypes.NewEmptyModuleAccount(stakingTypes.NotBondedPoolName, authTypes.Burner, authTypes.Staking)
-	// bondPoolAcc := authTypes.NewEmptyModuleAccount(stakingTypes.BondedPoolName, authTypes.Burner, authTypes.Staking)
-	// distAcc := authTypes.NewEmptyModuleAccount(distTypes.ModuleName)
-	// oracleAcc := authTypes.NewEmptyModuleAccount(types.ModuleName, authTypes.Minter)
-
-	// Assign accounts on the account keeper
-	// accountKeeper.SetModuleAccount(ctx, faucetAcc)
-	// accountKeeper.SetModuleAccount(ctx, feeCollectorAcc)
-	// accountKeeper.SetModuleAccount(ctx, notBondedPoolAcc)
-	// accountKeeper.SetModuleAccount(ctx, bondPoolAcc)
-	// accountKeeper.SetModuleAccount(ctx, distAcc)
-	// accountKeeper.SetModuleAccount(ctx, oracleAcc)
+	err = distKeeper.FeePool.Set(ctx, distribtypes.InitialFeePool())
+	require.NoError(t, err)
+	distParams := distribtypes.DefaultParams()
+	distParams.CommunityTax = math.LegacyNewDecWithPrec(2, 2) // 0.02
+	err = distKeeper.Params.Set(ctx, distParams)
+	require.NoError(t, err)
+	stakingKeeper.SetHooks(stakingtypes.NewMultiStakingHooks(distKeeper.Hooks()))
 
 	// Create total supply of my testing env and mint on the faucetAcc
 	totalSupply := kiiCoins
-	err := bankKeeper.MintCoins(ctx, faucetAccountName, totalSupply)
+	err = bankKeeper.MintCoins(ctx, faucetAccountName, totalSupply)
 	require.NoError(t, err) // Validate the operation
 
 	// Verify the faucet balance
@@ -242,12 +253,12 @@ func CreateTestInput(t *testing.T) TestInput {
 	require.True(t, balance.IsGTE(kiiCoins[0]), "Faucet account does not have enough funds")
 
 	// Send some tokens to not_bonded_tokens_pool account
-	err = bankKeeper.SendCoinsFromModuleToModule(ctx, faucetAccountName, stakingTypes.NotBondedPoolName, sdk.NewCoins(sdk.NewCoin(utils.MicroKiiDenom, math.NewInt(100))))
+	err = bankKeeper.SendCoinsFromModuleToModule(ctx, faucetAccountName, stakingtypes.NotBondedPoolName, sdk.NewCoins(sdk.NewCoin(utils.MicroKiiDenom, math.NewInt(100))))
 	require.NoError(t, err) // Validate the operation
 
 	// Send initial funds to testing accounts
 	for _, addr := range Addrs {
-		// accountKeeper.SetAccount(ctx, authTypes.NewBaseAccountWithAddress(addr)) // Ensure the account exists
+		// accountKeeper.SetAccount(ctx, authtypes.NewBaseAccountWithAddress(addr)) // Ensure the account exists
 		err := bankKeeper.SendCoinsFromModuleToAccount(ctx, faucetAccountName, addr, InitialCoins)
 		require.NoError(t, err) // Validate the operation
 	}
@@ -257,15 +268,18 @@ func CreateTestInput(t *testing.T) TestInput {
 	require.NotNil(t, addr, "Oracle account was not set")
 
 	// Set Oracle module
-	oracleKeeper := NewKeeper(appCodec, keyOracle, paramsKeeper.Subspace(types.ModuleName),
-		accountKeeper, bankKeeper, stakingKeeper, distTypes.ModuleName)
+	oracleKeeper := NewKeeper(appCodec, runtime.NewKVStoreService(keys[types.StoreKey]),
+		accountKeeper, bankKeeper, stakingKeeper, authority.String())
 
 	oracleParams := types.DefaultParams()
-	oracleKeeper.SetParams(ctx, oracleParams)
+
+	err = oracleKeeper.Params.Set(ctx, oracleParams)
+	require.NoError(t, err)
 
 	// Set the desired denoms
 	for _, denom := range oracleParams.Whitelist {
-		oracleKeeper.SetVoteTarget(ctx, denom.Name)
+		err = oracleKeeper.VoteTarget.Set(ctx, denom.Name, types.Denom{Name: denom.Name})
+		require.NoError(t, err)
 	}
 
 	return TestInput{
@@ -281,12 +295,20 @@ func CreateTestInput(t *testing.T) TestInput {
 
 // NewTestMsgCreateValidator simulate the message used on create a validator
 // this function should be used ONLY FOR TESTING
-func NewTestMsgCreateValidator(address sdk.ValAddress, pubKey cryptotypes.PubKey, amount math.Int) *stakingTypes.MsgCreateValidator {
-	rate := math.LegacyNewDecWithPrec(5, 2)                    // 0.05
-	selfDelegation := sdk.NewCoin(utils.MicroKiiDenom, amount) // Create kii coin
-	commission := stakingTypes.NewCommissionRates(rate, rate, rate)
-	msg, _ := stakingTypes.NewMsgCreateValidator(address.String(), pubKey, selfDelegation, stakingTypes.Description{}, commission, math.OneInt()) // create a new MsgCreateValidator instance
+func NewTestMsgCreateValidator(address sdk.ValAddress, pubKey cryptotypes.PubKey, amount math.Int) *stakingtypes.MsgCreateValidator {
+	// Get the validator rates (0.05)
+	rate := math.LegacyNewDecWithPrec(5, 2)
+	// Build the self delegation
+	selfDelegation := sdk.NewCoin(utils.MicroKiiDenom, amount)
+	// Build the commission rates
+	commission := stakingtypes.NewCommissionRates(rate, rate, rate)
 
+	// Get the message
+	msg, _ := stakingtypes.NewMsgCreateValidator(address.String(), pubKey, selfDelegation, stakingtypes.Description{
+		Moniker: fmt.Sprint("val-", address.String()),
+	}, commission, math.OneInt()) // create a new MsgCreateValidator instance
+
+	// Return the message
 	return msg
 }
 

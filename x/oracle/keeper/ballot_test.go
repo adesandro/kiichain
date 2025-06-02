@@ -5,16 +5,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"cosmossdk.io/math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
+
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
 	"github.com/kiichain/kiichain/v1/x/oracle/utils"
-	"github.com/stretchr/testify/require"
 )
 
 func TestOrganizeBallotByDenom(t *testing.T) {
-
 	// Prepare the test environment
 	init := CreateTestInput(t)
 	oracleKeeper := init.OracleKeeper
@@ -35,7 +37,9 @@ func TestOrganizeBallotByDenom(t *testing.T) {
 	_, err = msgServer.CreateValidator(ctx, val1)
 	require.NoError(t, err)
 
-	// execute staking endblocker to start validators bon
+	// execute staking endblocker to start validators bonded
+	_, err = stakingKeeper.EndBlocker(ctx)
+	require.NoError(t, err)
 
 	// Simulate aggregation exchange rate process
 	exchangeRate1 := types.ExchangeRateTuples{
@@ -53,11 +57,13 @@ func TestOrganizeBallotByDenom(t *testing.T) {
 	}
 
 	exchangeRateVote1, err := types.NewAggregateExchangeRateVote(exchangeRate1, ValAddrs[0]) // Aggregate rate tuples from Val0
-	oracleKeeper.SetAggregateExchangeRateVote(ctx, ValAddrs[0], exchangeRateVote1)
+	require.NoError(t, err)
+	err = oracleKeeper.AggregateExchangeRateVote.Set(ctx, ValAddrs[0], exchangeRateVote1)
 	require.NoError(t, err)
 
 	exchangeRateVote2, err := types.NewAggregateExchangeRateVote(exchangeRate2, ValAddrs[1]) // Aggregate rate tuples from Val1
-	oracleKeeper.SetAggregateExchangeRateVote(ctx, ValAddrs[1], exchangeRateVote2)
+	require.NoError(t, err)
+	err = oracleKeeper.AggregateExchangeRateVote.Set(ctx, ValAddrs[1], exchangeRateVote2)
 	require.NoError(t, err)
 
 	// Get claim map
@@ -72,6 +78,7 @@ func TestOrganizeBallotByDenom(t *testing.T) {
 		validator, err := stakingKeeper.Validator(ctx, valAddr) // get validator by address
 		require.NoError(t, err)
 
+		// Set the validator as bonded for calculations
 		valPower := validator.GetConsensusPower(powerReduction)
 		operator := validator.GetOperator()
 
@@ -100,7 +107,7 @@ func TestOrganizeBallotByDenom(t *testing.T) {
 		{Denom: utils.MicroUsdcDenom, ExchangeRate: math.LegacyNewDec(3), Power: int64(10), Voter: ValAddrs[1]},
 	}
 
-	ukiiBallot := types.ExchangeRateBallot{
+	akiiBallot := types.ExchangeRateBallot{
 		{Denom: utils.MicroKiiDenom, ExchangeRate: math.LegacyNewDec(4), Power: int64(10), Voter: ValAddrs[0]},
 		{Denom: utils.MicroKiiDenom, ExchangeRate: math.LegacyNewDec(4), Power: int64(10), Voter: ValAddrs[1]},
 	}
@@ -108,16 +115,18 @@ func TestOrganizeBallotByDenom(t *testing.T) {
 	sort.Sort(uatomBallot)
 	sort.Sort(uethBallot)
 	sort.Sort(uusdcBallot)
-	sort.Sort(ukiiBallot)
+	sort.Sort(akiiBallot)
 
 	// Call function
-	denomBallot := oracleKeeper.OrganizeBallotByDenom(ctx, validatorClaimMap)
+	denomBallot, err := oracleKeeper.OrganizeBallotByDenom(ctx, validatorClaimMap)
+	require.NoError(t, err)
 
 	// Validation
-	require.ElementsMatch(t, uatomBallot, denomBallot[utils.MicroAtomDenom])
+	microAtomDenomBallot := denomBallot[utils.MicroAtomDenom]
+	require.ElementsMatch(t, uatomBallot, microAtomDenomBallot)
 	require.ElementsMatch(t, uethBallot, denomBallot[utils.MicroEthDenom])
 	require.ElementsMatch(t, uusdcBallot, denomBallot[utils.MicroUsdcDenom])
-	require.ElementsMatch(t, ukiiBallot, denomBallot[utils.MicroKiiDenom])
+	require.ElementsMatch(t, akiiBallot, denomBallot[utils.MicroKiiDenom])
 }
 
 func TestClearBallots(t *testing.T) {
@@ -142,7 +151,8 @@ func TestClearBallots(t *testing.T) {
 	require.NoError(t, err)
 
 	// execute staking endblocker to start validators bonding
-	stakingKeeper.EndBlocker(ctx)
+	_, err = stakingKeeper.EndBlocker(ctx)
+	require.NoError(t, err)
 
 	// Simulate aggregation exchange rate process
 	exchangeRate1 := types.ExchangeRateTuples{
@@ -160,20 +170,23 @@ func TestClearBallots(t *testing.T) {
 	}
 
 	exchangeRateVote1, err := types.NewAggregateExchangeRateVote(exchangeRate1, ValAddrs[0]) // Aggregate rate tuples from Val0
-	oracleKeeper.SetAggregateExchangeRateVote(ctx, ValAddrs[0], exchangeRateVote1)
+	require.NoError(t, err)
+	err = oracleKeeper.AggregateExchangeRateVote.Set(ctx, ValAddrs[0], exchangeRateVote1)
 	require.NoError(t, err)
 
 	exchangeRateVote2, err := types.NewAggregateExchangeRateVote(exchangeRate2, ValAddrs[1]) // Aggregate rate tuples from Val1
-	oracleKeeper.SetAggregateExchangeRateVote(ctx, ValAddrs[1], exchangeRateVote2)
+	require.NoError(t, err)
+	err = oracleKeeper.AggregateExchangeRateVote.Set(ctx, ValAddrs[1], exchangeRateVote2)
 	require.NoError(t, err)
 
-	// Delete the added exchange rate
-	oracleKeeper.ClearBallots(ctx)
+	// Clear all votes
+	err = oracleKeeper.AggregateExchangeRateVote.Clear(ctx, nil)
+	require.NoError(t, err)
 
 	// Validate process
-	_, err = oracleKeeper.GetAggregateExchangeRateVote(ctx, ValAddrs[0])
+	_, err = oracleKeeper.AggregateExchangeRateVote.Get(ctx, ValAddrs[0])
 	require.Error(t, err)
-	_, err = oracleKeeper.GetAggregateExchangeRateVote(ctx, ValAddrs[1])
+	_, err = oracleKeeper.AggregateExchangeRateVote.Get(ctx, ValAddrs[1])
 	require.Error(t, err)
 }
 
@@ -183,8 +196,10 @@ func TestApplyWhitelist(t *testing.T) {
 	oracleKeeper := init.OracleKeeper
 	bankKeeper := init.BankKeeper
 	ctx := init.Ctx
-	oracleParams := oracleKeeper.GetParams(ctx)
-	oracleKeeper.DeleteVoteTargets(ctx) // Delete voting target to start test from scrath
+	oracleParams, err := oracleKeeper.Params.Get(ctx)
+	require.NoError(t, err)
+	err = oracleKeeper.VoteTarget.Clear(ctx, nil) // Delete voting target to start test from scrath
+	require.NoError(t, err)
 
 	// Define new whitelist (adds uusdc)
 	whiteList := types.DenomList{
@@ -194,23 +209,28 @@ func TestApplyWhitelist(t *testing.T) {
 		{Name: utils.MicroUsdcDenom}, // New Denom
 	}
 	oracleParams.Whitelist = whiteList
-	oracleKeeper.SetParams(ctx, oracleParams)
+	err = oracleKeeper.Params.Set(ctx, oracleParams)
+	require.NoError(t, err)
 
 	// Set vote targets manually before applying the new whitelist
-	oracleKeeper.SetVoteTarget(ctx, utils.MicroAtomDenom)
-	oracleKeeper.SetVoteTarget(ctx, utils.MicroEthDenom)
-	oracleKeeper.SetVoteTarget(ctx, utils.MicroKiiDenom)
+	err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroAtomDenom, types.Denom{Name: utils.MicroAtomDenom})
+	require.NoError(t, err)
+	err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroEthDenom, types.Denom{Name: utils.MicroEthDenom})
+	require.NoError(t, err)
+	err = oracleKeeper.VoteTarget.Set(ctx, utils.MicroKiiDenom, types.Denom{Name: utils.MicroKiiDenom})
+	require.NoError(t, err)
 
 	// Ensure that uusdc is NOT present before applying the whitelist
-	_, err := oracleKeeper.GetVoteTarget(ctx, utils.MicroUsdcDenom)
+	_, err = oracleKeeper.VoteTarget.Get(ctx, utils.MicroUsdcDenom)
 	require.Error(t, err)
 
 	// Apply whitelist
-	oracleKeeper.ApplyWhitelist(ctx, whiteList, map[string]types.Denom{})
+	err = oracleKeeper.ApplyWhitelist(ctx, whiteList, map[string]types.Denom{})
+	require.NoError(t, err)
 
 	// Check that all elements in whitelist are now in voteTargets
 	for _, item := range whiteList {
-		_, err := oracleKeeper.GetVoteTarget(ctx, item.Name)
+		_, err := oracleKeeper.VoteTarget.Get(ctx, item.Name)
 		require.NoError(t, err)
 	}
 

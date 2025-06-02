@@ -4,9 +4,11 @@ import (
 	"context"
 
 	"cosmossdk.io/errors"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
+
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
 )
 
@@ -56,7 +58,13 @@ func (ms msgServer) AggregateExchangeRateVote(ctx context.Context, msg *types.Ms
 
 	// Check all denoms are in the vote target
 	for _, exchangeRate := range exchangeRates {
-		if !ms.IsVoteTarget(sdkCtx, exchangeRate.Denom) {
+		found, err := ms.Keeper.VoteTarget.Has(ctx, exchangeRate.Denom)
+		if err != nil {
+			return nil, err
+		}
+
+		// Check if found
+		if !found {
 			return nil, errors.Wrap(types.ErrUnknownDenom, exchangeRate.Denom)
 		}
 	}
@@ -67,7 +75,10 @@ func (ms msgServer) AggregateExchangeRateVote(ctx context.Context, msg *types.Ms
 		return nil, errors.Wrap(types.ErrAggregateVoteInvalidRate, exchangeRates.String())
 	}
 
-	ms.SetAggregateExchangeRateVote(sdkCtx, valAddress, aggregateExchangeRateVote)
+	err = ms.Keeper.AggregateExchangeRateVote.Set(sdkCtx, valAddress, aggregateExchangeRateVote)
+	if err != nil {
+		return nil, err
+	}
 
 	// Trigger events (exchange rate saved and the feeder address)
 	sdkCtx.EventManager().EmitEvents(sdk.Events{
@@ -76,7 +87,7 @@ func (ms msgServer) AggregateExchangeRateVote(ctx context.Context, msg *types.Ms
 			sdk.NewAttribute(types.AttributeKeyVoter, msg.Validator),
 			sdk.NewAttribute(types.AttributeKeyExchangeRates, msg.ExchangeRates),
 		),
-		sdk.NewEvent( //the Event with the information who send the information (the feeder address and the module name)
+		sdk.NewEvent( // the Event with the information who send the information (the feeder address and the module name)
 			sdk.EventTypeMessage,
 			sdk.NewAttribute(sdk.AttributeKeyModule, types.AttributeValueCategory),
 			sdk.NewAttribute(sdk.AttributeKeySender, msg.Feeder),
@@ -110,15 +121,18 @@ func (ms msgServer) DelegateFeedConsent(ctx context.Context, msg *types.MsgDeleg
 	}
 
 	// Assign the delegator from the validator address
-	ms.SetFeederDelegation(sdkCtx, validatorAddress, delegatorAddress)
+	err = ms.FeederDelegation.Set(sdkCtx, validatorAddress, delegatorAddress.String())
+	if err != nil {
+		return nil, err
+	}
 
 	// Trigger events (exchange rate saved and the feeder address)
 	sdkCtx.EventManager().EmitEvents(sdk.Events{
-		sdk.NewEvent( //the Event with the address to be registered as a delegated address (as a feeder)
+		sdk.NewEvent( // the Event with the address to be registered as a delegated address (as a feeder)
 			types.EventTypeFeedDelegate,
 			sdk.NewAttribute(types.AttributeKeyFeeder, msg.Delegate),
 		),
-		sdk.NewEvent( //the Event with the information who send the information (the validator address and the module name)
+		sdk.NewEvent( // the Event with the information who send the information (the validator address and the module name)
 			sdk.EventTypeMessage,
 			sdk.NewAttribute(sdk.AttributeKeyModule, types.AttributeValueCategory),
 			sdk.NewAttribute(sdk.AttributeKeySender, msg.Operator),

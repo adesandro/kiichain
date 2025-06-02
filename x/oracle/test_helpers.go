@@ -3,38 +3,44 @@ package oracle
 import (
 	"testing"
 
-	"cosmossdk.io/math"
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
-	"github.com/kiichain/kiichain/v1/x/oracle/keeper"
-	"github.com/kiichain/kiichain/v1/x/oracle/types"
 	"github.com/stretchr/testify/require"
 	protov2 "google.golang.org/protobuf/proto"
+
+	"cosmossdk.io/math"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
+
+	"github.com/kiichain/kiichain/v1/x/oracle/keeper"
+	"github.com/kiichain/kiichain/v1/x/oracle/types"
 )
 
 var (
 	stakingAmount       = sdk.TokensFromConsensusPower(10, sdk.DefaultPowerReduction)
 	randomAExchangeRate = math.LegacyNewDec(1700)
-	randomBExchangeRate = math.LegacyNewDecWithPrec(4882, 2)
 )
 
 // SetUp returns the message server
 func SetUp(t *testing.T) (keeper.TestInput, types.MsgServer) {
+	t.Helper()
 	input := keeper.CreateTestInput(t)
 	oracleKeeper := input.OracleKeeper
 	stakingKeeper := input.StakingKeeper
 	ctx := input.Ctx
 
 	// Update params to test easier and faster
-	params := oracleKeeper.GetParams(ctx)
+	params, err := oracleKeeper.Params.Get(ctx)
+	require.NoError(t, err)
 	params.VotePeriod = 1
 	params.SlashWindow = 100
-	oracleKeeper.SetParams(ctx, params)
+	err = oracleKeeper.Params.Set(ctx, params)
+	require.NoError(t, err)
 
 	stakingParams, err := stakingKeeper.GetParams(ctx)
 	require.NoError(t, err)
 	stakingParams.MinCommissionRate = math.LegacyNewDecWithPrec(0, 2) // 0.00
-	stakingKeeper.SetParams(ctx, stakingParams)
+	err = stakingKeeper.SetParams(ctx, stakingParams)
+	require.NoError(t, err)
 
 	// Create handlers
 	oracleMsgServer := keeper.NewMsgServer(oracleKeeper)
@@ -54,7 +60,8 @@ func SetUp(t *testing.T) (keeper.TestInput, types.MsgServer) {
 	require.NoError(t, err)
 
 	// execute staking endblocker to start validators bonding
-	stakingKeeper.EndBlocker(ctx)
+	_, err = stakingKeeper.EndBlocker(ctx)
+	require.NoError(t, err)
 
 	return input, oracleMsgServer
 }

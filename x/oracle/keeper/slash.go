@@ -4,22 +4,30 @@ import (
 	"strconv"
 
 	"cosmossdk.io/math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
 	"github.com/kiichain/kiichain/v1/x/oracle/types"
 )
 
 // SlashAndResetCounters calculate if the validator must be slashed if success votes / total votes
 // is lower than MinValidPerWindow param. Then reset the vote penalty info
-func (k Keeper) SlashAndResetCounters(ctx sdk.Context) {
+func (k Keeper) SlashAndResetCounters(ctx sdk.Context) error {
 	height := ctx.BlockHeight()
 	distributionHeight := height - sdk.ValidatorUpdateDelay - 1
 
-	minValidPerWindow := k.MinValidPerWindow(ctx) // get from params
-	slashFraction := k.SlashFraction(ctx)         // get from params
+	// Get the module params
+	params, err := k.Params.Get(ctx)
+	if err != nil {
+		return err
+	}
+
+	minValidPerWindow := params.MinValidPerWindow
+	slashFraction := params.SlashFraction
 	powerReduction := k.StakingKeeper.PowerReduction(ctx)
 
 	// Iterate each voting result per validator
-	k.IterateVotePenaltyCounters(ctx, func(operator sdk.ValAddress, votePenaltyCounter types.VotePenaltyCounter) bool {
+	err = k.VotePenaltyCounter.Walk(ctx, nil, func(operator sdk.ValAddress, votePenaltyCounter types.VotePenaltyCounter) (bool, error) {
 		successCount := votePenaltyCounter.SuccessCount
 		abstainCount := votePenaltyCounter.AbstainCount
 		missCount := votePenaltyCounter.MissCount
@@ -28,7 +36,7 @@ func (k Keeper) SlashAndResetCounters(ctx sdk.Context) {
 		totalVotes := successCount + abstainCount + missCount
 		if totalVotes == 0 {
 			ctx.Logger().Error("zero votes in penalty counter, this should never happen")
-			return false
+			return false, nil
 		}
 
 		// rate = successVotes / total votes
@@ -47,8 +55,14 @@ func (k Keeper) SlashAndResetCounters(ctx sdk.Context) {
 				}
 
 				consensusPower := validator.GetConsensusPower(powerReduction)
-				k.StakingKeeper.Slash(ctx, consAddr, distributionHeight, consensusPower, slashFraction) // slash validator
-				k.StakingKeeper.Jail(ctx, consAddr)                                                     // Jail validator
+				_, err = k.StakingKeeper.Slash(ctx, consAddr, distributionHeight, consensusPower, slashFraction) // slash validator
+				if err != nil {
+					return true, err
+				}
+				err = k.StakingKeeper.Jail(ctx, consAddr) // Jail validator
+				if err != nil {
+					return true, err
+				}
 			}
 		}
 
@@ -63,7 +77,8 @@ func (k Keeper) SlashAndResetCounters(ctx sdk.Context) {
 		)
 
 		// Reset voting counter
-		k.DeleteVotePenaltyCounter(ctx, operator)
-		return false
+		err := k.VotePenaltyCounter.Remove(ctx, operator)
+		return false, err
 	})
+	return err
 }
