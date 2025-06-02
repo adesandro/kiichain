@@ -8,3 +8,4 @@
 - Refactor the wasmbinding implementation to allow multiple msg and query types
 - Add EVM wasmbinding queries
 - Add bech32 wasmbinding queries
+- Add the param change proposal to the oracle module
