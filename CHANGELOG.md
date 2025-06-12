@@ -9,3 +9,4 @@
 - Add EVM wasmbinding queries
 - Add bech32 wasmbinding queries
 - Add the param change proposal to the oracle module
+- Integrate Oracle on the app and add the gas less fees
