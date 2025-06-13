@@ -33,8 +33,8 @@ import (
 	feemarkettypes "github.com/cosmos/evm/x/feemarket/types"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 
-	oracletypes "github.com/kiichain/kiichain/v1/x/oracle/types"
-	tokenfactorytypes "github.com/kiichain/kiichain/v1/x/tokenfactory/types"
+	oracletypes "github.com/kiichain/kiichain/v2/x/oracle/types"
+	tokenfactorytypes "github.com/kiichain/kiichain/v2/x/tokenfactory/types"
 )
 
 func (appKeepers *AppKeepers) GenerateKeys() {

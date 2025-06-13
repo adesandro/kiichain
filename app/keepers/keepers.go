@@ -85,11 +85,11 @@ import (
 	evmkeeper "github.com/cosmos/evm/x/vm/keeper"
 	evmtypes "github.com/cosmos/evm/x/vm/types"
 
-	"github.com/kiichain/kiichain/v1/wasmbinding"
-	oraclekeeper "github.com/kiichain/kiichain/v1/x/oracle/keeper"
-	oracletypes "github.com/kiichain/kiichain/v1/x/oracle/types"
-	tokenfactorykeeper "github.com/kiichain/kiichain/v1/x/tokenfactory/keeper"
-	tokenfactorytypes "github.com/kiichain/kiichain/v1/x/tokenfactory/types"
+	"github.com/kiichain/kiichain/v2/wasmbinding"
+	oraclekeeper "github.com/kiichain/kiichain/v2/x/oracle/keeper"
+	oracletypes "github.com/kiichain/kiichain/v2/x/oracle/types"
+	tokenfactorykeeper "github.com/kiichain/kiichain/v2/x/tokenfactory/keeper"
+	tokenfactorytypes "github.com/kiichain/kiichain/v2/x/tokenfactory/types"
 )
 
 type AppKeepers struct {
